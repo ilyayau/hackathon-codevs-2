@@ -3,22 +3,121 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>Simple Counter App</title>
+    <title>AI Post Generator</title>
     <link rel="stylesheet" href="styles.css">
 </head>
 <body>
-    <div class="container">
-        <h1>Simple Counter App</h1>
-        <div class="counter-display">
-            <span id="count">0</span>
-        </div>
-        <div class="button-group">
-            <button id="decreaseBtn" class="btn btn-decrease">Decrease</button>
-            <button id="resetBtn" class="btn btn-reset">Reset</button>
-            <button id="increaseBtn" class="btn btn-increase">Increase</button>
+    <div class="app-container">
+        <div class="main-content">
+            <header class="header">
+                <div class="header-left">
+                    <div class="logo-circle"></div>
+                    <div>
+                        <div class="logo-title">AI POST GENERATOR</div>
+                        <div class="logo-subtitle">Transform short notes into engaging social media posts</div>
+                    </div>
+                </div>
+                <div class="header-badges">
+                    <div class="badge badge-secondary">Hackathon prototype</div>
+                    <div class="badge badge-primary">Smart hashtag generation · Audience-aware</div>
+                </div>
+            </header>
+
+            <main class="main-grid">
+                <section class="left-section">
+                    <div class="section-label">pipeline</div>
+                    <h1 class="main-title">
+                        Turn short notes into <span class="highlight">engaging social media posts</span>
+                    </h1>
+                    <p class="description">
+                        Enter a short description like "I went to Dubai, explored fancy big towers, met John and Sarah, Audience: Relatives" 
+                        and get a complete Instagram or LinkedIn post with relevant hashtags, expanded descriptions, 
+                        and audience-appropriate tone.
+                    </p>
+                    <div class="steps-grid">
+                        <div class="step-card">
+                            <div class="step-label">step 1</div>
+                            Enter short note with location, activities, people met, and audience.
+                        </div>
+                        <div class="step-card">
+                            <div class="step-label">step 2</div>
+                            AI expands content and generates relevant hashtags.
+                        </div>
+                        <div class="step-card">
+                            <div class="step-label">step 3</div>
+                            Get ready-to-post content with audience-appropriate tone.
+                        </div>
+                    </div>
+                    <div id="parsedInput" class="parsed-input" style="display: none;">
+                        <div class="parsed-label">Parsed Input:</div>
+                        <div id="parsedLocation">Location: Not detected</div>
+                        <div id="parsedActivities">Activities: Not detected</div>
+                        <div id="parsedPeople">People met: Not detected</div>
+                        <div id="parsedAudience">Audience: General</div>
+                    </div>
+                </section>
+
+                <section class="right-section">
+                    <div class="card">
+                        <div class="card-header">
+                            <div>
+                                <div class="card-title">Generate post</div>
+                                <div class="card-subtitle">Smart expansion + hashtag generation</div>
+                            </div>
+                            <div class="chip" id="activeAuthorChip">no author</div>
+                        </div>
+                        <div class="form-grid">
+                            <div class="form-group">
+                                <label>Author</label>
+                                <select id="authorSelect" aria-label="Select author" title="Select author">
+                                    <option value="">No authors</option>
+                                </select>
+                                <div class="form-hint">Based on local dataset</div>
+                            </div>
+                            <div class="form-group">
+                                <label>Social network</label>
+                                <select id="socialNetworkSelect" aria-label="Select social network" title="Select social network">
+                                    <option value="instagram">Instagram</option>
+                                    <option value="linkedin">LinkedIn</option>
+                                    <option value="telegram">Telegram</option>
+                                </select>
+                                <div class="form-hint">Format & hashtag count</div>
+                            </div>
+                        </div>
+                        <div class="form-group">
+                            <label>Short Note (with Audience)</label>
+                            <textarea id="topicInput" placeholder='Example: "I went to Dubai, explored fancy big towers, met John and Sarah, Audience: Relatives"'></textarea>
+                            <div class="form-hint">Format: "Activity, location, met [names], Audience: [Relatives/Friends/Professional]"</div>
+                        </div>
+                        <div class="button-row">
+                            <button id="generateBtn" class="btn-primary">⚡ Generate post</button>
+                            <div id="status" class="status">Ready</div>
+                        </div>
+                        <div id="generatedOutput" class="output-box">Generated post will appear here.</div>
+                    </div>
+
+                    <div class="card">
+                        <div class="card-header">
+                            <div>
+                                <div class="card-title">Author style profile</div>
+                                <div class="card-subtitle">Speech patterns and tokens</div>
+                            </div>
+                            <div class="chip" id="styleChip">style: idle</div>
+                        </div>
+                        <div class="button-row">
+                            <button id="analyzeBtn" class="btn-secondary">Analyze style</button>
+                        </div>
+                        <div id="styleInfo" class="output-box-small">Style metrics will appear here.</div>
+                        <div id="traits" class="traits-container"></div>
+                    </div>
+                </section>
+            </main>
+
+            <div id="socialMediaSection" class="social-section"></div>
         </div>
     </div>
-    <script src="script.js"></script>
+
+    <script src="authorsData.js"></script>
+    <script src="app.js"></script>
 </body>
 </html>
-
