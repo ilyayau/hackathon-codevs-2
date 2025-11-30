@@ -1,11 +1,33 @@
 import React, { useEffect, useMemo, useState } from "react";
 import { authorsData } from "./authorsData";
-import { SocialMediaSection } from "./src/components/SocialMediaSection";
 
 type Author = {
   author_id: string;
   social_network: string;
   sample_posts: string[];
+};
+
+type Tonality = {
+  formality: "formal" | "informal";
+  formalityRatio: number;
+  positivity: "positive" | "neutral";
+  positivityScore: number;
+};
+
+type SentencePatterns = {
+  avgSentenceLength: number;
+  shortSentences: number;
+  longSentences: number;
+  questions: number;
+  exclamations: number;
+  startsWithI: number;
+  startsWithVerb: number;
+  totalSentences: number;
+};
+
+type OpeningClosing = {
+  openings: string[];
+  closings: string[];
 };
 
 type StyleFeatures = {
@@ -15,6 +37,12 @@ type StyleFeatures = {
   exclam_per_post: number;
   quest_per_post: number;
   favorite_tokens: string[];
+  language: string;
+  tonality: Tonality;
+  sentencePatterns: SentencePatterns;
+  characteristicPhrases: string[];
+  openingClosing: OpeningClosing;
+  avgPostLength: number;
 };
 
 type StyleTraits = string[];
@@ -23,6 +51,7 @@ type ParsedInput = {
   content: string;
   location?: string;
   activities: string[];
+  people: string[];
   audience: string;
 };
 
@@ -100,70 +129,195 @@ function generateFromMarkov(
   return detokenize(tokens);
 }
 
-function humanizeText(text: string): string {
+// ===== Advanced Style Analysis =====
+
+function detectLanguage(posts: string[]): string {
+  const allText = posts.join(" ").toLowerCase();
+  const cyrillicCount = (allText.match(/[\u0400-\u04FF]/g) || []).length;
+  const latinCount = (allText.match(/[a-zA-Z]/g) || []).length;
+  const arabicCount = (allText.match(/[\u0600-\u06FF]/g) || []).length;
+  const cjkCount = (allText.match(/[\u4E00-\u9FFF\u3040-\u30FF]/g) || []).length;
+  
+  const total = cyrillicCount + latinCount + arabicCount + cjkCount;
+  if (total === 0) return "en";
+  
+  if (cyrillicCount / total > 0.3) return "ru";
+  if (arabicCount / total > 0.3) return "ar";
+  if (cjkCount / total > 0.3) return "cjk";
+  return "en";
+}
+
+function analyzeTonality(posts: string[]): Tonality {
+  const allText = posts.join(" ").toLowerCase();
+  
+  const formalWords = ["opportunity", "regarding", "therefore", "furthermore", "however", "professional", "strategic", "commitment", "impressive", "remarkable", "approach", "framework", "insights", "productive", "excellent"];
+  const informalWords = ["awesome", "cool", "amazing", "crazy", "wild", "love", "best", "great", "fun", "vibes", "loving", "wow", "fantastic"];
+  
+  let formalScore = 0;
+  let informalScore = 0;
+  
+  for (const word of formalWords) {
+    formalScore += (allText.match(new RegExp("\\b" + word + "\\b", "gi")) || []).length;
+  }
+  for (const word of informalWords) {
+    informalScore += (allText.match(new RegExp("\\b" + word + "\\b", "gi")) || []).length;
+  }
+  
+  const emojiCount = (posts.join(" ").match(/[\u{1F300}-\u{1FAFF}]/gu) || []).length;
+  informalScore += emojiCount * 2;
+  
+  const positiveWords = ["amazing", "incredible", "beautiful", "wonderful", "excellent", "fantastic", "love", "great", "grateful", "exciting", "impressive", "breathtaking", "stunning", "fascinating"];
+  let positiveScore = 0;
+  for (const word of positiveWords) {
+    positiveScore += (allText.match(new RegExp("\\b" + word + "\\b", "gi")) || []).length;
+  }
+  
+  return {
+    formality: formalScore > informalScore ? "formal" : "informal",
+    formalityRatio: formalScore / Math.max(1, formalScore + informalScore),
+    positivity: positiveScore > posts.length * 0.8 ? "positive" : "neutral",
+    positivityScore: positiveScore / posts.length
+  };
+}
+
+function extractSentencePatterns(posts: string[]): SentencePatterns {
+  const patterns: SentencePatterns = {
+    avgSentenceLength: 0,
+    shortSentences: 0,
+    longSentences: 0,
+    questions: 0,
+    exclamations: 0,
+    startsWithI: 0,
+    startsWithVerb: 0,
+    totalSentences: 0
+  };
+  
+  const verbStarters = ["exploring", "walking", "having", "just", "visited", "attended", "had", "loving", "feeling"];
+  
+  for (const post of posts) {
+    const sentences = post.split(/[.!?]+/).filter(s => s.trim().length > 0);
+    patterns.totalSentences += sentences.length;
+    
+    for (const sent of sentences) {
+      const words = sent.trim().split(/\s+/);
+      patterns.avgSentenceLength += words.length;
+      
+      if (words.length <= 8) patterns.shortSentences++;
+      else if (words.length > 20) patterns.longSentences++;
+      
+      const firstWord = words[0]?.toLowerCase() || "";
+      if (firstWord === "i" || firstWord === "i'm" || firstWord === "i've") patterns.startsWithI++;
+      if (verbStarters.some(v => firstWord.startsWith(v))) patterns.startsWithVerb++;
+    }
+    
+    patterns.questions += (post.match(/\?/g) || []).length;
+    patterns.exclamations += (post.match(/!/g) || []).length;
+  }
+  
+  patterns.avgSentenceLength = patterns.avgSentenceLength / Math.max(1, patterns.totalSentences);
+  
+  return patterns;
+}
+
+function extractOpeningClosingPhrases(posts: string[]): OpeningClosing {
+  const openings: string[] = [];
+  const closings: string[] = [];
+  
+  for (const post of posts) {
+    const sentences = post.split(/[.!?]+/).filter(s => s.trim().length > 0);
+    if (sentences.length > 0) {
+      const opening = sentences[0].trim();
+      if (opening.length > 5 && opening.length < 100) {
+        openings.push(opening);
+      }
+    }
+    if (sentences.length > 1) {
+      const closing = sentences[sentences.length - 1].trim();
+      if (closing.length > 5 && closing.length < 100) {
+        closings.push(closing);
+      }
+    }
+  }
+  
+  return { openings, closings };
+}
+
+function extractCharacteristicPhrases(posts: string[]): string[] {
+  const allText = posts.join(" ");
+  const phrases: { phrase: string; count: number }[] = [];
+  
+  const words = allText.split(/\s+/);
+  const phraseMap = new Map<string, number>();
+  
+  for (let len = 2; len <= 4; len++) {
+    for (let i = 0; i <= words.length - len; i++) {
+      const phrase = words.slice(i, i + len).join(" ").toLowerCase();
+      if (/^[\w\s]+$/.test(phrase)) {
+        phraseMap.set(phrase, (phraseMap.get(phrase) || 0) + 1);
+      }
+    }
+  }
+  
+  for (const [phrase, count] of phraseMap.entries()) {
+    if (count >= 2 && phrase.split(" ").length >= 2) {
+      phrases.push({ phrase, count });
+    }
+  }
+  
+  phrases.sort((a, b) => b.count - a.count);
+  return phrases.slice(0, 15).map(p => p.phrase);
+}
+
+function humanizeText(text: string, preserveStyle = false): string {
   let h = text;
   h = h.replace(/—/g, ",");
   h = h.replace(/\*\*/g, "");
   h = h.replace(/\*/g, "");
   h = h.replace(/#{1,6}\s/g, "");
-  h = h.replace(/;/g, ".");
-  const banned: [RegExp, string][] = [
-    [/\butilize\b/gi, "use"],
-    [/\butilizing\b/gi, "using"],
-    [/\bcan\b/gi, "will"],
-    [/\bdelve\b/gi, "explore"],
-    [/\bembark\b/gi, "start"],
-    [/\bgame-changer\b/gi, "major change"],
-    [/\bunlock\b/gi, "access"],
-    [/\bdiscover\b/gi, "find"],
-    [/\brevolutionize\b/gi, "change"],
-    [/\bdisruptive\b/gi, "new"],
-    [/\bdive deep\b/gi, "examine"],
-    [/\btapestry\b/gi, "mix"],
-    [/\billuminate\b/gi, "show"],
-    [/\bunveil\b/gi, "reveal"],
-    [/\bpivotal\b/gi, "key"],
-    [/\bintricate\b/gi, "complex"],
-    [/\belucidate\b/gi, "explain"],
-    [/\bharness\b/gi, "use"],
-    [/\bgroundbreaking\b/gi, "new"],
-    [/\bcutting-edge\b/gi, "modern"],
-    [/\bremarkable\b/gi, "notable"],
-    [/\bboost\b/gi, "increase"],
-    [/\bpowerful\b/gi, "strong"],
-    [/\bever-evolving\b/gi, "changing"]
-  ];
-  for (const [re, repl] of banned) h = h.replace(re, repl);
-  const transitions: [RegExp, string][] = [
-    [/In conclusion\b/gi, "Bottom line"],
-    [/In summary\b/gi, "To sum up"],
-    [/Furthermore\b/gi, "Plus"],
-    [/However\b/gi, "But"],
-    [/Therefore\b/gi, "So"],
-    [/Additionally\b/gi, "Also"],
-    [/Moreover\b/gi, "And"],
-    [/Hence\b/gi, "So"]
-  ];
-  for (const [re, repl] of transitions) h = h.replace(re, repl);
-  h = h.replace(/It is important to note that\b/gi, "Note:");
-  h = h.replace(/It should be noted that\b/gi, "Note:");
-  h = h.replace(/It is worth mentioning that\b/gi, "");
-  h = h.replace(/In a world where\b/gi, "When");
-  h = h.replace(/not just .+?, but also\b/gi, "and");
-  h = h.replace(/remains to be seen\b/gi, "is unclear");
-  const fillers = [
-    "very",
-    "really",
-    "literally",
-    "actually",
-    "certainly",
-    "probably",
-    "basically"
-  ];
-  for (const w of fillers) {
-    const re = new RegExp("\\b" + w + "\\s+", "gi");
-    h = h.replace(re, "");
+  
+  // Only apply aggressive replacements when not preserving style
+  if (!preserveStyle) {
+    const banned: [RegExp, string][] = [
+      [/\butilize\b/gi, "use"],
+      [/\butilizing\b/gi, "using"],
+      [/\bdelve\b/gi, "explore"],
+      [/\bembark\b/gi, "start"],
+      [/\bgame-changer\b/gi, "major change"],
+      [/\bdisruptive\b/gi, "new"],
+      [/\bdive deep\b/gi, "examine"],
+      [/\btapestry\b/gi, "mix"],
+      [/\billuminate\b/gi, "show"],
+      [/\bunveil\b/gi, "reveal"],
+      [/\belucidate\b/gi, "explain"],
+      [/\bgroundbreaking\b/gi, "new"],
+      [/\bever-evolving\b/gi, "changing"]
+    ];
+    for (const [re, repl] of banned) h = h.replace(re, repl);
+    
+    const transitions: [RegExp, string][] = [
+      [/In conclusion\b/gi, "Bottom line"],
+      [/In summary\b/gi, "To sum up"],
+      [/Furthermore\b/gi, "Plus"],
+      [/However\b/gi, "But"],
+      [/Therefore\b/gi, "So"],
+      [/Additionally\b/gi, "Also"],
+      [/Moreover\b/gi, "And"],
+      [/Hence\b/gi, "So"]
+    ];
+    for (const [re, repl] of transitions) h = h.replace(re, repl);
+    h = h.replace(/It is important to note that\b/gi, "Note:");
+    h = h.replace(/It should be noted that\b/gi, "Note:");
+    h = h.replace(/It is worth mentioning that\b/gi, "");
+    h = h.replace(/In a world where\b/gi, "When");
+    h = h.replace(/not just .+?, but also\b/gi, "and");
+    
+    const fillers = ["very", "really", "literally", "actually", "certainly", "probably", "basically"];
+    for (const w of fillers) {
+      const re = new RegExp("\\b" + w + "\\s+", "gi");
+      h = h.replace(re, "");
+    }
   }
+  
   h = h.replace(/\s+/g, " ");
   h = h.replace(/\s+\./g, ".");
   h = h.replace(/\s+,/g, ",");
@@ -194,7 +348,7 @@ function isGibberish(text: string): boolean {
   return ratioSingle > 0.45 && ratioLong < 0.25;
 }
 
-// ===== NEW: Parse input format =====
+// ===== Parse input format =====
 function parseInput(input: string): ParsedInput {
   const audienceMatch = input.match(/Audience:\s*([^,]+)/i);
   const audience = audienceMatch ? audienceMatch[1].trim() : "General";
@@ -202,11 +356,46 @@ function parseInput(input: string): ParsedInput {
   let content = input.replace(/Audience:\s*[^,]+/i, "").trim();
   content = content.replace(/,\s*$/, "").trim();
   
-  // Extract location (capitalized words, common place names)
   const locationMatch = content.match(/\b(Dubai|Paris|London|Tokyo|New York|Moscow|Berlin|Rome|Barcelona|Amsterdam|Vienna|Prague|Bangkok|Singapore|Sydney|Melbourne|Toronto|Vancouver|Los Angeles|San Francisco|Miami|Las Vegas|Bali|Maldives|Santorini|Istanbul|Cairo|Marrakech|Madrid|Lisbon|Stockholm|Oslo|Copenhagen|Helsinki|Warsaw|Krakow|Budapest|Athens|Zurich|Geneva|Monaco|Monte Carlo|Venice|Florence|Milan|Naples|Porto|Seville|Granada|Valencia|Ibiza|Mykonos|Crete|Rhodes)\b/i);
   const location = locationMatch ? locationMatch[1] : undefined;
   
-  // Extract activities (verbs + objects)
+  // Extract people/names
+  const people: string[] = [];
+  const peoplePatterns = [
+    /(met|met with|saw|caught up with|hung out with|spent time with|reunited with|visited with|had dinner with|had lunch with|had coffee with)\s+([^,]+?)(?=,|$)/gi
+  ];
+  
+  for (const pattern of peoplePatterns) {
+    let match;
+    pattern.lastIndex = 0;
+    while ((match = pattern.exec(content)) !== null) {
+      const personText = match[0].trim();
+      const namesMatch = personText.match(/(?:met|met with|saw|caught up with|hung out with|spent time with|reunited with|visited with|had dinner with|had lunch with|had coffee with)\s+(.+)/i);
+      if (namesMatch) {
+        let names = namesMatch[1].trim();
+        const namesList = names.replace(/\s+and\s+/gi, ', ').split(',').map(n => n.trim()).filter(n => n.length > 0);
+        const filteredNames = namesList.filter(name => {
+          const lower = name.toLowerCase();
+          return !lower.match(/^(my|an|a|the|friend|friends|colleague|colleagues|family|relative|relatives)$/);
+        });
+        if (filteredNames.length > 0) {
+          people.push(...filteredNames);
+        }
+      }
+    }
+  }
+  
+  // Filter out landmarks from people list
+  const landmarks = ["eiffel tower", "big ben", "tower bridge", "statue of liberty", "colosseum", "taj mahal", 
+    "great wall", "pyramids", "burj khalifa", "sydney opera house", "golden gate", "christ the redeemer",
+    "tower", "bridge", "monument", "statue", "cathedral", "palace", "castle", "museum", "gallery"];
+  const uniquePeople = Array.from(new Set(people.map(p => p.trim()).filter(p => {
+    if (p.length === 0) return false;
+    const lower = p.toLowerCase();
+    return !landmarks.some(l => lower.includes(l));
+  })));
+  
+  // Extract activities
   const activities: string[] = [];
   const activityPatterns = [
     /(explored|visited|saw|discovered|experienced|enjoyed|tried|tasted|walked|hiked|drove|flew|stayed|relaxed|shopped|danced|partied|swam|surfed|skied|climbed|photographed|admired|appreciated)\s+([^,]+?)(?=,|$)/gi,
@@ -215,179 +404,311 @@ function parseInput(input: string): ParsedInput {
   
   for (const pattern of activityPatterns) {
     let match;
-    // Reset regex lastIndex to avoid issues with multiple calls
     pattern.lastIndex = 0;
     while ((match = pattern.exec(content)) !== null) {
       const activity = match[0].trim();
-      if (activity && !activities.includes(activity) && !activity.toLowerCase().includes('audience')) {
+      if (activity && !activities.includes(activity) && 
+          !activity.toLowerCase().includes('audience') &&
+          !activity.toLowerCase().match(/^(met|saw|met with|caught up with|hung out with)/)) {
         activities.push(activity);
       }
     }
   }
   
-  // If no activities found, try to extract key phrases (excluding location and audience)
   if (activities.length === 0) {
-    let phrases = content.split(',').map(p => p.trim()).filter(p => {
+    const phrases = content.split(',').map(p => p.trim()).filter(p => {
       const lower = p.toLowerCase();
       if (p.length === 0 || lower.includes('audience')) return false;
       if (locationMatch && locationMatch[1] && lower.includes(locationMatch[1].toLowerCase())) return false;
+      if (lower.match(/^(met|saw|met with|caught up with|hung out with)/)) return false;
       return true;
     });
     activities.push(...phrases.slice(0, 3));
   }
   
-  return { content, location, activities, audience };
+  return { content, location, activities, people: uniquePeople, audience };
 }
 
-// ===== NEW: Generate hashtags =====
-function generateHashtags(parsed: ParsedInput, socialNetwork: string): string[] {
+// ===== Generate hashtags =====
+function generateHashtags(parsed: ParsedInput, socialNetwork: string, authorStyle?: StyleFeatures): string[] {
   const hashtags: string[] = [];
-  const keywords: string[] = [];
   
-  // Add location-based hashtags
-  if (parsed.location) {
-    const loc = parsed.location.toLowerCase().replace(/\s+/g, '');
-    hashtags.push(`#${loc}`, `#${loc}travel`, `#${loc}holiday`, `#visit${loc}`);
-    keywords.push(parsed.location);
+  if (authorStyle && authorStyle.hashtags_per_post >= 0.5) {
+    if (parsed.location) {
+      const loc = parsed.location.toLowerCase().replace(/\s+/g, '');
+      hashtags.push(`#${loc}`);
+      if (authorStyle.tonality && authorStyle.tonality.formality !== "formal") {
+        hashtags.push(`#${loc}travel`);
+      }
+    }
+  } else if (authorStyle && authorStyle.hashtags_per_post < 0.5) {
+    if (parsed.location) {
+      const loc = parsed.location.toLowerCase().replace(/\s+/g, '');
+      hashtags.push(`#${loc}`);
+    }
+    return Array.from(new Set(hashtags)).slice(0, 3);
+  } else {
+    if (parsed.location) {
+      const loc = parsed.location.toLowerCase().replace(/\s+/g, '');
+      hashtags.push(`#${loc}`, `#${loc}travel`);
+    }
   }
   
-  // Add activity-based hashtags
   for (const activity of parsed.activities) {
     const words = activity.toLowerCase().split(/\s+/);
     for (const word of words) {
-      if (word.length > 3 && /^[a-z]+$/.test(word)) {
-        const cleanWord = word.replace(/ed$|ing$|s$/, '');
-        if (cleanWord.length > 3) {
+      if (word.length > 4 && /^[a-z]+$/.test(word)) {
+        let cleanWord = word;
+        if (word.endsWith('ed') && word.length > 6) {
+          cleanWord = word.slice(0, -2);
+          if (/([bcdfghjklmnpqrstvwxyz])\1$/.test(cleanWord)) {
+            cleanWord = cleanWord.slice(0, -1);
+          }
+        } else if (word.endsWith('ing') && word.length > 7) {
+          cleanWord = word.slice(0, -3);
+          if (/([bcdfghjklmnpqrstvwxyz])\1$/.test(cleanWord)) {
+            cleanWord = cleanWord.slice(0, -1);
+          }
+        }
+        if (cleanWord.length >= 5 && !["went", "that", "this", "with", "from", "have", "been", "made", "took", "came", "very", "explor", "explo"].includes(cleanWord)) {
           hashtags.push(`#${cleanWord}`);
-          keywords.push(word);
         }
       }
     }
   }
   
-  // Add seasonal/travel hashtags
-  const month = new Date().getMonth();
-  const season = month >= 2 && month <= 4 ? 'spring' : 
-                 month >= 5 && month <= 7 ? 'summer' : 
-                 month >= 8 && month <= 10 ? 'autumn' : 'winter';
-  hashtags.push(`#${season}vacation`, `#${season}travel`, `#${season}holiday`);
-  
-  // Add general travel hashtags
-  hashtags.push('#travel', '#wanderlust', '#explore', '#adventure', '#vacation', '#holiday');
-  
-  // Add audience-specific hashtags
-  if (parsed.audience.toLowerCase().includes('relative') || parsed.audience.toLowerCase().includes('family')) {
-    hashtags.push('#familytime', '#familyvacation', '#familytrip');
-  } else if (parsed.audience.toLowerCase().includes('friend')) {
-    hashtags.push('#friends', '#friendstrip', '#travelwithfriends');
-  } else if (parsed.audience.toLowerCase().includes('professional') || parsed.audience.toLowerCase().includes('colleague')) {
-    hashtags.push('#businesstrip', '#professional', '#networking');
+  const sn = socialNetwork.toLowerCase();
+  if (sn === 'instagram') {
+    hashtags.push('#travel', '#wanderlust', '#explore');
+  } else if (sn === 'linkedin') {
+    if (parsed.location) {
+      hashtags.push('#businesstravel');
+    }
+    hashtags.push('#networking', '#professional');
+  } else if (sn === 'telegram') {
+    hashtags.push('#travel');
   }
   
-  // Remove duplicates and limit count
+  if (parsed.people && parsed.people.length > 0 && authorStyle && authorStyle.tonality.formality !== "formal") {
+    hashtags.push('#meetup', '#friends');
+  }
+  
   const unique = Array.from(new Set(hashtags));
-  const maxHashtags = socialNetwork.toLowerCase() === 'instagram' ? 15 : 5;
+  let maxHashtags: number;
+  if (sn === 'instagram') {
+    maxHashtags = authorStyle && authorStyle.hashtags_per_post > 2 ? 10 : 6;
+  } else if (sn === 'linkedin') {
+    maxHashtags = 4;
+  } else {
+    maxHashtags = 4;
+  }
+  
   return unique.slice(0, maxHashtags);
 }
 
-// ===== NEW: Expand short input into longer description =====
-function expandInput(parsed: ParsedInput, authorStyle: StyleFeatures): string {
+// ===== Expand input into full post =====
+function expandInput(parsed: ParsedInput, authorStyle: StyleFeatures, socialNetwork: string): string {
   const parts: string[] = [];
+  const { tonality, emojis_per_post } = authorStyle;
   
-  // Opening based on audience
-  if (parsed.audience.toLowerCase().includes('relative') || parsed.audience.toLowerCase().includes('family')) {
-    parts.push("Just wanted to share an amazing experience with you all!");
-  } else if (parsed.audience.toLowerCase().includes('professional') || parsed.audience.toLowerCase().includes('colleague')) {
-    parts.push("Excited to share a recent experience that I believe will be of interest.");
+  const isTravelTopic = parsed.location || 
+    parsed.activities.some(a => /\b(visit|travel|explore|trip|vacation|holiday|tour|sight)\b/i.test(a));
+  
+  if (tonality.formality === "formal") {
+    if (parsed.location) {
+      parts.push(`Recently had the opportunity to visit ${parsed.location}.`);
+    } else if (isTravelTopic) {
+      parts.push("Excited to share a recent travel experience.");
+    } else {
+      parts.push("Excited to share a recent experience.");
+    }
   } else {
-    parts.push("Had an incredible experience recently!");
+    if (isTravelTopic) {
+      const informalOpenings = [
+        parsed.location ? `Just arrived in ${parsed.location}!` : "What an adventure!",
+        parsed.location ? `${parsed.location} vibes!` : "Loving this!",
+        parsed.location ? `Exploring ${parsed.location}!` : "Travel time!",
+      ];
+      parts.push(randomChoice(informalOpenings));
+    } else {
+      const generalOpenings = [
+        "Excited to share this!",
+        "Big news!",
+        "Reflecting on something important.",
+        "Had an interesting experience recently.",
+      ];
+      parts.push(randomChoice(generalOpenings));
+    }
   }
   
-  // Location introduction
-  if (parsed.location) {
-    parts.push(`I recently visited ${parsed.location}, and it was absolutely breathtaking.`);
+  if (parsed.location && !parts[0].toLowerCase().includes(parsed.location.toLowerCase())) {
+    if (tonality.formality === "formal") {
+      parts.push(`The city offers a unique blend of culture and innovation.`);
+    } else if (tonality.positivity === "positive") {
+      parts.push(`It's absolutely breathtaking!`);
+    } else {
+      parts.push(`So much to see and do here.`);
+    }
   }
   
-  // Activities expansion
   if (parsed.activities.length > 0) {
-    // Clean up activities - remove "I went to" if location is already mentioned
-    let cleanActivities = parsed.activities.map(a => {
-      let cleaned = a.trim();
-      // Remove redundant "went to [location]" if location is already mentioned
-      if (parsed.location && cleaned.toLowerCase().includes(`went to ${parsed.location.toLowerCase()}`)) {
+    const cleanActivities = parsed.activities.map(a => {
+      let cleaned = a.trim().replace(/^I\s+/i, '');
+      if (parsed.location && cleaned.toLowerCase().includes(parsed.location.toLowerCase())) {
         return null;
       }
-      // Remove "I" prefix if present
-      cleaned = cleaned.replace(/^I\s+/i, '');
-      return cleaned;
-    }).filter(a => a !== null && a.length > 0) as string[];
+      const isActivity = /^(explored|visited|saw|discovered|experienced|enjoyed|tried|tasted|walked|hiked|drove|flew|stayed|relaxed|shopped|danced|partied|swam|surfed|skied|climbed|photographed|admired|appreciated|went|traveled|met|learned|attended|had)/i.test(cleaned);
+      
+      if (isActivity) {
+        if (cleaned.match(/^(explored|visited|saw)\s+/i)) {
+          cleaned = cleaned.replace(/^(explored|visited|saw)\s+(?!the\s)/i, (match, verb) => {
+            return verb + ' the ';
+          });
+        }
+        return cleaned;
+      } else {
+        const lowerCleaned = cleaned.charAt(0).toLowerCase() + cleaned.slice(1);
+        return `reflected on ${lowerCleaned}`;
+      }
+    }).filter((a): a is string => a !== null && a.length > 0);
     
     if (cleanActivities.length > 0) {
-      const activityText = cleanActivities.length === 1 
-        ? cleanActivities[0]
-        : cleanActivities.slice(0, -1).join(', ') + ' and ' + cleanActivities[cleanActivities.length - 1];
-      parts.push(`During my time there, I ${activityText}.`);
-      
-      // Add descriptive elements
-      if (cleanActivities.some(a => a.toLowerCase().includes('explore') || a.toLowerCase().includes('visit'))) {
-        parts.push("The experience was truly memorable and left me with so many amazing memories.");
-      }
-      if (cleanActivities.some(a => a.toLowerCase().includes('tower') || a.toLowerCase().includes('building'))) {
-        parts.push("The architecture was stunning, and the views were absolutely spectacular.");
+      if (tonality.formality === "formal") {
+        const activityText = cleanActivities.join(" and ");
+        if (parsed.location) {
+          parts.push(`During my time there, I ${activityText}.`);
+        } else {
+          parts.push(`I ${activityText}.`);
+        }
+        parts.push("The experience provided valuable insights and memorable moments.");
+      } else {
+        const activityText = cleanActivities.length === 1 
+          ? cleanActivities[0]
+          : cleanActivities.slice(0, -1).join(', ') + ' and ' + cleanActivities[cleanActivities.length - 1];
+        
+        const positiveAdjective = authorStyle.favorite_tokens.find(t => 
+          ["amazing", "incredible", "stunning", "beautiful", "awesome", "wonderful", "fantastic"].includes(t.toLowerCase())
+        ) || (tonality.positivity === "positive" ? "amazing" : "great");
+        
+        parts.push(`I ${activityText}. It was ${positiveAdjective}!`);
       }
     }
   }
   
-  // Closing based on audience
-  if (parsed.audience.toLowerCase().includes('relative') || parsed.audience.toLowerCase().includes('family')) {
-    parts.push("Can't wait to show you all the photos and tell you more about it!");
-  } else if (parsed.audience.toLowerCase().includes('professional')) {
-    parts.push("Looking forward to connecting and sharing more insights.");
-  } else {
-    parts.push("Highly recommend checking it out if you get the chance!");
+  if (parsed.people && parsed.people.length > 0) {
+    const peopleText = parsed.people.length === 1 
+      ? parsed.people[0]
+      : parsed.people.slice(0, -1).join(', ') + ' and ' + parsed.people[parsed.people.length - 1];
+    
+    if (tonality.formality === "formal") {
+      parts.push(`I also had the pleasure of meeting ${peopleText}.`);
+    } else {
+      parts.push(`Met ${peopleText} along the way!`);
+    }
   }
   
   return parts.join(' ');
 }
 
-// ===== NEW: Adjust tone based on audience =====
-function adjustToneForAudience(text: string, audience: string): string {
-  let adjusted = text;
-  const aud = audience.toLowerCase();
+// ===== Adapt for social network =====
+function adaptForSocialNetwork(text: string, socialNetwork: string, authorStyle: StyleFeatures): string {
+  let adapted = text;
+  const sn = socialNetwork.toLowerCase();
   
-  if (aud.includes('professional') || aud.includes('colleague') || aud.includes('linkedin')) {
-    // More formal, professional tone
-    adjusted = adjusted.replace(/\bcan't\b/gi, "cannot");
-    adjusted = adjusted.replace(/\bwon't\b/gi, "will not");
-    adjusted = adjusted.replace(/\bdidn't\b/gi, "did not");
-    adjusted = adjusted.replace(/\bawesome\b/gi, "impressive");
-    adjusted = adjusted.replace(/\bcool\b/gi, "notable");
-    adjusted = adjusted.replace(/\bamazing\b/gi, "remarkable");
-  } else if (aud.includes('relative') || aud.includes('family') || aud.includes('friend')) {
-    // More casual, personal tone
-    adjusted = adjusted.replace(/\bremarkable\b/gi, "amazing");
-    adjusted = adjusted.replace(/\bimpressive\b/gi, "awesome");
-    adjusted = adjusted.replace(/\bnotable\b/gi, "cool");
+  if (sn === "linkedin") {
+    if (authorStyle.emojis_per_post < 1) {
+      adapted = adapted.replace(/[\u{1F300}-\u{1FAFF}]/gu, "");
+    } else {
+      let count = 0;
+      adapted = adapted.replace(/[\u{1F300}-\u{1FAFF}]/gu, (match) => {
+        count++;
+        return count <= 2 ? match : "";
+      });
+    }
+    if (!adapted.match(/\.$|!$|\?$/)) {
+      adapted += ".";
+    }
+  } else if (sn === "instagram") {
+    if (authorStyle.emojis_per_post >= 0.5 && !adapted.match(/[\u{1F300}-\u{1FAFF}]/u)) {
+      adapted += " ✨";
+    }
+  } else if (sn === "telegram") {
+    const words = adapted.split(/\s+/);
+    if (words.length > 100) {
+      const sentences = adapted.split(/(?<=[.!?])\s+/);
+      adapted = sentences.slice(0, Math.ceil(sentences.length * 0.7)).join(" ");
+    }
+  } else if (sn === "facebook") {
+    if (authorStyle.quest_per_post >= 0.5 && !adapted.includes("?")) {
+      adapted += " What do you think?";
+    }
   }
   
-  return adjusted;
+  return adapted;
 }
 
-function templateFromTopicAndTokens(topic: string, fav: string[]): string {
-  const cleanTopic =
-    topic.trim().charAt(0).toUpperCase() + topic.trim().slice(1);
-  const keyWords = fav.slice(0, 6).join(", ");
-  return (
-    cleanTopic +
-    ". " +
-    "Этот текст написан в стиле автора и опирается на его типичные темы: " +
-    keyWords +
-    "."
-  );
+// ===== Main generation function =====
+function generateStyledPost(authorId: string, socialNetwork: string, topic: string, samplePosts: string[]): string {
+  const parsed = parseInput(topic);
+  const authorStyle = extractStyleFeatures(samplePosts);
+  let generatedText = expandInput(parsed, authorStyle, socialNetwork);
+  
+  const chain = buildMarkov(samplePosts, 2);
+  if (chain.size > 0 && samplePosts.length >= 3 && authorStyle.tonality.formality !== "formal") {
+    const topicTokens = tokenize(topic).filter((x) => /\w/.test(x));
+    const maxTokens = 80;
+    
+    const markovText = generateFromMarkov(chain, 2, maxTokens, topicTokens);
+    if (markovText && !isGibberish(markovText)) {
+      const cleanMarkovText = markovText.replace(/#\w+/g, '').trim();
+      const markovSentences = cleanMarkovText.split(/(?<=[.!?])\s+/).filter(s => {
+        const trimmed = s.trim();
+        return trimmed.length > 15 && trimmed.length < 120 && !trimmed.startsWith('#');
+      });
+      
+      if (markovSentences.length > 0) {
+        const existingLower = generatedText.toLowerCase();
+        const relevantSentences = markovSentences
+          .filter(s => {
+            const lower = s.toLowerCase();
+            if (/^(and|but|so|or|the|a|is|are)\s/i.test(s.trim())) {
+              return false;
+            }
+            const isRelevant = (parsed.location && lower.includes(parsed.location.toLowerCase())) ||
+                   lower.includes("architecture") ||
+                   lower.includes("experience") ||
+                   lower.includes("amazing") ||
+                   lower.includes("incredible") ||
+                   lower.includes("view") ||
+                   lower.includes("city") ||
+                   lower.includes("love");
+            const words = lower.split(/\s+/).filter(w => w.length > 3);
+            const uniqueWords = words.filter(w => !existingLower.includes(w));
+            const noveltyRatio = uniqueWords.length / Math.max(1, words.length);
+            return isRelevant && noveltyRatio > 0.4;
+          })
+          .slice(0, 1);
+        
+        if (relevantSentences.length > 0) {
+          generatedText += " " + relevantSentences[0].trim();
+        }
+      }
+    }
+  }
+  
+  generatedText = humanizeText(generatedText, true);
+  generatedText = cutToFullSentence(generatedText);
+  generatedText = adaptForSocialNetwork(generatedText, socialNetwork, authorStyle);
+  
+  const hashtags = generateHashtags(parsed, socialNetwork, authorStyle);
+  const hashtagString = hashtags.length > 0 ? hashtags.join(' ') : '';
+  const finalPost = generatedText + (hashtagString ? '\n\n' + hashtagString : '');
+  
+  return finalPost;
 }
 
 function extractStyleFeatures(posts: string[]): StyleFeatures {
-  let n = posts.length;
+  const n = posts.length;
   if (!n) {
     return {
       avg_words: 0,
@@ -395,33 +716,48 @@ function extractStyleFeatures(posts: string[]): StyleFeatures {
       hashtags_per_post: 0,
       exclam_per_post: 0,
       quest_per_post: 0,
-      favorite_tokens: []
+      favorite_tokens: [],
+      language: "en",
+      tonality: { formality: "informal", formalityRatio: 0.5, positivity: "neutral", positivityScore: 0 },
+      sentencePatterns: {
+        avgSentenceLength: 0, shortSentences: 0, longSentences: 0,
+        questions: 0, exclamations: 0, startsWithI: 0, startsWithVerb: 0, totalSentences: 0
+      },
+      characteristicPhrases: [],
+      openingClosing: { openings: [], closings: [] },
+      avgPostLength: 0
     };
   }
+  
   let emojis = 0;
   let hashtags = 0;
   let exclam = 0;
   let quest = 0;
   let allTokens: string[] = [];
-  let wordsPerPost: number[] = [];
+  const wordsPerPost: number[] = [];
+  const charsPerPost: number[] = [];
   const emojiRe = /[\u{1F300}-\u{1FAFF}]/gu;
+  
   for (const p of posts) {
     const toks = tokenize(p);
     allTokens = allTokens.concat(toks);
     const words = toks.filter((t) => /\w/.test(t));
     wordsPerPost.push(words.length);
+    charsPerPost.push(p.length);
     const emojiMatches = p.match(emojiRe);
     emojis += emojiMatches ? emojiMatches.length : 0;
     hashtags += toks.filter((t) => t.startsWith("#")).length;
     exclam += (p.match(/!/g) || []).length;
     quest += (p.match(/\?/g) || []).length;
   }
-  const avgWords =
-    wordsPerPost.reduce((a, b) => a + b, 0) / (wordsPerPost.length || 1);
+  
+  const avgWords = wordsPerPost.reduce((a, b) => a + b, 0) / (wordsPerPost.length || 1);
+  const avgPostLength = charsPerPost.reduce((a, b) => a + b, 0) / (charsPerPost.length || 1);
   const emojisPerPost = emojis / n;
   const hashtagsPerPost = hashtags / n;
   const exclamPerPost = exclam / n;
   const questPerPost = quest / n;
+  
   const freq = new Map<string, number>();
   for (const t of allTokens) {
     const key = t.toLowerCase();
@@ -430,15 +766,27 @@ function extractStyleFeatures(posts: string[]): StyleFeatures {
   const top = Array.from(freq.entries())
     .sort((a, b) => b[1] - a[1])
     .map(([w]) => w);
-  // Support any Unicode letter (works with all languages: English, Russian, Arabic, Chinese, Japanese, etc.)
   const fav = top.filter((w) => /^\p{L}{4,}$/u.test(w)).slice(0, 10);
+  
+  const language = detectLanguage(posts);
+  const tonality = analyzeTonality(posts);
+  const sentencePatterns = extractSentencePatterns(posts);
+  const characteristicPhrases = extractCharacteristicPhrases(posts);
+  const openingClosing = extractOpeningClosingPhrases(posts);
+  
   return {
     avg_words: avgWords,
     emojis_per_post: emojisPerPost,
     hashtags_per_post: hashtagsPerPost,
     exclam_per_post: exclamPerPost,
     quest_per_post: questPerPost,
-    favorite_tokens: fav
+    favorite_tokens: fav,
+    language,
+    tonality,
+    sentencePatterns,
+    characteristicPhrases,
+    openingClosing,
+    avgPostLength
   };
 }
 
@@ -453,6 +801,19 @@ function styleTraits(f: StyleFeatures): StyleTraits {
   if (f.hashtags_per_post > 1) t.push("actively uses hashtags");
   if (f.quest_per_post > 0.5) t.push("often asks questions");
   if (f.exclam_per_post > 0.5) t.push("excited, emotional tone");
+  
+  if (f.tonality) {
+    if (f.tonality.formality === "formal") t.push("formal professional style");
+    else t.push("casual conversational style");
+    
+    if (f.tonality.positivity === "positive") t.push("positive enthusiastic tone");
+  }
+  
+  if (f.language && f.language !== "en") {
+    const langNames: Record<string, string> = { ru: "Russian", ar: "Arabic", cjk: "Chinese/Japanese" };
+    t.push(`writes in ${langNames[f.language] || f.language}`);
+  }
+  
   return t;
 }
 
@@ -470,7 +831,7 @@ const App = () => {
   const [styleInfo, setStyleInfo] = useState(
     "Style metrics will appear here."
   );
-  const [traits, setTraits] = useState<StyleTraits[]>([]);
+  const [traits, setTraits] = useState<StyleTraits>([]);
   const [activeAuthorChip, setActiveAuthorChip] = useState("no author");
   const [styleChip, setStyleChip] = useState("style: idle");
   const [parsedInput, setParsedInput] = useState<ParsedInput | null>(null);
@@ -502,12 +863,16 @@ const App = () => {
     const feats = extractStyleFeatures(currentAuthor.sample_posts);
     const tr = styleTraits(feats);
     const metrics = {
-      avg_words: feats.avg_words,
-      emojis_per_post: feats.emojis_per_post,
-      hashtags_per_post: feats.hashtags_per_post,
-      exclam_per_post: feats.exclam_per_post,
-      quest_per_post: feats.quest_per_post,
-      favorite_tokens: feats.favorite_tokens
+      avg_words: Math.round(feats.avg_words * 10) / 10,
+      emojis_per_post: Math.round(feats.emojis_per_post * 10) / 10,
+      hashtags_per_post: Math.round(feats.hashtags_per_post * 10) / 10,
+      exclam_per_post: Math.round(feats.exclam_per_post * 10) / 10,
+      quest_per_post: Math.round(feats.quest_per_post * 10) / 10,
+      language: feats.language,
+      formality: feats.tonality ? feats.tonality.formality : "unknown",
+      positivity: feats.tonality ? feats.tonality.positivity : "unknown",
+      favorite_tokens: feats.favorite_tokens,
+      characteristic_phrases: feats.characteristicPhrases ? feats.characteristicPhrases.slice(0, 5) : []
     };
     setStyleInfo(JSON.stringify(metrics, null, 2));
     setTraits(tr);
@@ -530,49 +895,17 @@ const App = () => {
     setGenerated("Generating post...");
     setActiveAuthorChip(currentAuthor.author_id);
 
-    // Parse input
+    // Parse input and store for display
     const parsed = parseInput(t);
     setParsedInput(parsed);
 
-    // Get author style
-    const feats = extractStyleFeatures(currentAuthor.sample_posts);
-    
-    // Expand the short input into longer description
-    let expandedText = expandInput(parsed, feats);
-    
-    // Try to enhance with Markov chain if we have enough data
-    const chain = buildMarkov(currentAuthor.sample_posts, 2);
-    if (chain.size > 0) {
-      const topicTokens = tokenize(expandedText).filter((x) => /\w/.test(x));
-      const maxTokens = socialNetwork.toLowerCase() === "instagram" ? 250 : 300;
-      
-      // Generate additional content using Markov
-      const markovText = generateFromMarkov(chain, 2, maxTokens, topicTokens);
-      if (markovText && !isGibberish(markovText)) {
-        // Blend expanded text with Markov-generated content
-        expandedText = expandedText + " " + markovText;
-      }
-    }
-    
-    // Humanize the text
-    let finalText = humanizeText(expandedText);
-    finalText = cutToFullSentence(finalText);
-    
-    // Adjust tone for audience
-    finalText = adjustToneForAudience(finalText, parsed.audience);
-    
-    // If still too short or gibberish, use template
-    if (!finalText || isGibberish(finalText) || finalText.split(' ').length < 20) {
-      finalText = expandInput(parsed, feats);
-      finalText = adjustToneForAudience(finalText, parsed.audience);
-    }
-    
-    // Generate hashtags
-    const hashtags = generateHashtags(parsed, socialNetwork);
-    const hashtagString = hashtags.join(' ');
-    
-    // Combine final text with hashtags
-    const finalPost = finalText + (hashtagString ? '\n\n' + hashtagString : '');
+    // Use the new styled post generation function
+    const finalPost = generateStyledPost(
+      currentAuthor.author_id,
+      socialNetwork,
+      t,
+      currentAuthor.sample_posts
+    );
     
     setGenerated(finalPost);
     setStatus("Generation done");
@@ -824,6 +1157,7 @@ const App = () => {
                 </div>
                 <div>Location: {parsedInput.location || "Not detected"}</div>
                 <div>Activities: {parsedInput.activities.join(", ") || "Not detected"}</div>
+                <div>People: {parsedInput.people && parsedInput.people.length > 0 ? parsedInput.people.join(", ") : "Not detected"}</div>
                 <div>Audience: {parsedInput.audience}</div>
               </div>
             )}
